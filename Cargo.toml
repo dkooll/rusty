@@ -1,0 +1,11 @@
+[package]
+name = "rusty"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "rusty"
+path = "rusty.rs"
+
+[dependencies]
+termion = "1.5"
