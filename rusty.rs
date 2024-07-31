@@ -32,38 +32,35 @@ fn main() -> io::Result<()> {
 
     print!("{}", color::Fg(color::Green));
     println!("Rusty timer started. Commands:");
-    println!("  ↑: Check remaining time");
     println!("  +: Increase break interval by 5 minutes");
     println!("  -: Decrease break interval by 5 minutes");
     println!("  q: Quit");
     io::stdout().flush()?;
 
     // Timer thread
-    thread::spawn(move || loop {
-        let now = get_current_time();
-        let next_break = next_break_time_clone.load(Ordering::Relaxed);
-        if now >= next_break {
-            println!("\n\rTime to take a break!");
-            io::stdout().flush().unwrap();
-            let interval = break_interval_clone.load(Ordering::Relaxed);
-            next_break_time_clone.store(now + interval, Ordering::Relaxed);
+    let _timer_handle = thread::spawn(move || {
+        loop {
+            let now = get_current_time();
+            let next_break = next_break_time_clone.load(Ordering::Relaxed);
+            if now >= next_break {
+                println!("\n\rTime to take a break!");
+                io::stdout().flush().unwrap();
+                let interval = break_interval_clone.load(Ordering::Relaxed);
+                next_break_time_clone.store(now + interval, Ordering::Relaxed);
+            } else {
+                let remaining = next_break - now;
+                print!("\r{}", clear::CurrentLine);
+                print!("Time until next break: {}", format_time(remaining));
+                io::stdout().flush().unwrap();
+            }
+            thread::sleep(Duration::from_secs(1));
         }
-        thread::sleep(Duration::from_secs(1));
     });
 
     let stdin = io::stdin();
     let mut stdout = io::stdout().into_raw_mode()?;
     for key in stdin.keys().flatten() {
         let message = match key {
-            Key::Up => {
-                let now = get_current_time();
-                let next_break = next_break_time.load(Ordering::Relaxed);
-                if now < next_break {
-                    format!("Time until next break: {}", format_time(next_break - now))
-                } else {
-                    "Break time! Take a break now.".to_string()
-                }
-            },
             Key::Char('+') | Key::Char('-') => {
                 let current_interval = break_interval.load(Ordering::Relaxed);
                 let (new_interval, action) = if key == Key::Char('+') {
