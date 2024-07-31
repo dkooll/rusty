@@ -9,3 +9,4 @@ path = "rusty.rs"
 
 [dependencies]
 termion = "1.5"
+ctrlc = "3.2"
