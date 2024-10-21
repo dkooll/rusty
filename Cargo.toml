@@ -8,5 +8,5 @@ name = "rusty"
 path = "rusty.rs"
 
 [dependencies]
-termion = "1.5"
+termion = "4.0.2"
 ctrlc = "3.2"
