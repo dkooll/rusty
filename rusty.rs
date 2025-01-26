@@ -33,6 +33,9 @@ fn format_time(seconds: u64) -> String {
     format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
 
+/// A configurable timer that manages break intervals and reminders
+///
+/// Handles thread-safe state management and user interactions
 struct Timer {
     break_interval: Arc<AtomicU64>,
     next_break_time: Arc<AtomicU64>,
@@ -43,6 +46,40 @@ struct Timer {
 }
 
 impl Timer {
+    /// Handle interval change requests from user input
+    fn handle_interval_change(
+        &self,
+        key: Key,
+        stdout: &mut termion::raw::RawTerminal<io::Stdout>,
+    ) -> io::Result<()> {
+        if !self.is_break_time.load(Ordering::SeqCst) {
+            let current_interval = self.break_interval.load(Ordering::SeqCst);
+            let (new_interval, action) = if key == Key::Char('+') {
+                (current_interval + self.config.interval_change, "increased")
+            } else {
+                let new_interval = (current_interval - self.config.interval_change)
+                    .max(self.config.min_break_interval);
+                (
+                    new_interval,
+                    if new_interval < current_interval {
+                        "decreased"
+                    } else {
+                        "already at minimum"
+                    },
+                )
+            };
+
+            self.break_interval.store(new_interval, Ordering::SeqCst);
+            self.next_break_time.store(new_interval, Ordering::SeqCst);
+
+            let message = format!("Break interval {} to {}", action, format_time(new_interval));
+            write!(stdout, "\r{}{}", clear::CurrentLine, message)?;
+            stdout.flush()?;
+        }
+        Ok(())
+    }
+
+    /// Create a new Timer with the specified configuration
     fn new(config: TimerConfig) -> Self {
         Self {
             break_interval: Arc::new(AtomicU64::new(config.default_break_interval)),
@@ -54,6 +91,9 @@ impl Timer {
         }
     }
 
+    /// Starts the timer thread that manages break reminders and countdown display
+    ///
+    /// Returns a thread handle that should be joined during cleanup
     fn start_timer_thread(&self) -> thread::JoinHandle<()> {
         let next_break_time = Arc::clone(&self.next_break_time);
         let reminder_count = Arc::clone(&self.reminder_count);
@@ -115,42 +155,56 @@ fn main() -> io::Result<()> {
     let timer_handle = timer.start_timer_thread();
 
     let stdin = io::stdin();
-    let mut stdout = io::stdout().into_raw_mode()?;
+    // RAII guard for terminal state
+    struct TerminalGuard {
+        stdout: termion::raw::RawTerminal<io::Stdout>,
+    }
+
+    impl TerminalGuard {
+        fn new() -> io::Result<Self> {
+            let mut stdout = io::stdout().into_raw_mode()?;
+            write!(stdout, "{}{}", cursor::Hide, color::Fg(color::Green))?;
+            Ok(Self { stdout })
+        }
+    }
+
+    impl Drop for TerminalGuard {
+        fn drop(&mut self) {
+            write!(
+                self.stdout,
+                "{}{}{}",
+                clear::CurrentLine,
+                color::Fg(color::Reset),
+                cursor::Show
+            )
+            .unwrap();
+            self.stdout.flush().unwrap();
+        }
+    }
+
+    let mut terminal = TerminalGuard::new()?;
 
     for key in stdin.keys().flatten() {
         match key {
             Key::Char('+') | Key::Char('-') => {
-                if !timer.is_break_time.load(Ordering::SeqCst) {
-                    let current_interval = timer.break_interval.load(Ordering::SeqCst);
-                    let (new_interval, action) = if key == Key::Char('+') {
-                        (current_interval + timer.config.interval_change, "increased")
-                    } else {
-                        let new_interval = (current_interval - timer.config.interval_change)
-                            .max(timer.config.min_break_interval);
-                        (
-                            new_interval,
-                            if new_interval < current_interval {
-                                "decreased"
-                            } else {
-                                "already at minimum"
-                            },
-                        )
-                    };
-
-                    timer.break_interval.store(new_interval, Ordering::SeqCst);
-                    timer.next_break_time.store(new_interval, Ordering::SeqCst);
-
-                    let message =
-                        format!("Break interval {} to {}", action, format_time(new_interval));
-                    write!(stdout, "\r{}{}", clear::CurrentLine, message)?;
-                    stdout.flush()?;
-                }
+                timer.handle_interval_change(key, &mut terminal.stdout)?
+            }
+            Key::Char('?') => {
+                write!(terminal.stdout, "\r{}Commands: + - q", clear::CurrentLine)?;
+                terminal.stdout.flush()?;
             }
             Key::Char('q') => {
                 timer.should_exit.store(true, Ordering::SeqCst);
                 break;
             }
-            _ => continue,
+            _ => {
+                write!(
+                    terminal.stdout,
+                    "\r{}Unknown command (press ? for help)",
+                    clear::CurrentLine
+                )?;
+                terminal.stdout.flush()?;
+            }
         }
     }
 
@@ -160,13 +214,13 @@ fn main() -> io::Result<()> {
 
     // Clean exit
     write!(
-        stdout,
+        terminal.stdout,
         "\r{}{}{}",
         clear::CurrentLine,
         color::Fg(color::Reset),
         cursor::Show
     )?;
-    stdout.flush()?;
+    terminal.stdout.flush()?;
 
     Ok(())
 }
